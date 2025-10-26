@@ -1,0 +1,5 @@
+{
+  "name": "ExaVMS",
+  "description": "A unified React frontend capable of connecting to various independent backends. The system is modular, dynamic, supports multiple languages, and features dark and light themes.",
+  "requestFramePermissions": []
+}
