@@ -3,6 +3,7 @@ import { useTranslation } from '../../hooks/useTranslation';
 import { useAuth } from '../../hooks/useAuth';
 import { useCameras } from '../../contexts/CameraContext';
 import WebRTCPlayer from '../../components/WebRTCPlayer';
+import VideoPlayer from '../../components/VideoPlayer';
 import type { Camera, GridCellState, GridLayout, SavedView, UserRole } from './types';
 import type { Server } from '../../config/serverConfig';
 
@@ -48,6 +49,32 @@ const createInitialGridState = (layout: GridLayout): GridCellState[] => {
         camera: null,
         quality: 'sub',
     }));
+};
+
+// Nueva función para reorganizar cámaras existentes en un nuevo layout
+const reorganizeCamerasForLayout = (currentGridState: GridCellState[], newLayout: GridLayout): GridCellState[] => {
+    const newGridSize = getGridCellsCount(newLayout);
+    const cameras = currentGridState.filter(cell => cell.camera !== null);
+
+    // Crear nuevo estado con el tamaño correcto
+    const newGridState = Array.from({ length: newGridSize }, (_, i) => ({
+        id: i,
+        camera: null,
+        quality: 'sub' as 'main' | 'sub',
+    }));
+
+    // Colocar las cámaras existentes en las primeras posiciones disponibles
+    cameras.forEach((cameraCell, index) => {
+        if (index < newGridSize) {
+            newGridState[index] = {
+                id: index,
+                camera: cameraCell.camera,
+                quality: cameraCell.quality,
+            };
+        }
+    });
+
+    return newGridState;
 };
 
 interface SavedViewItemProps {
@@ -227,10 +254,11 @@ const VideoCell = React.memo(({ cell, onQualityChange, onClearCell }: { cell: Gr
             </div>
 
             {(cell.camera.streams.main || cell.camera.streams.sub) ? (
-                <WebRTCPlayer 
+                <VideoPlayer 
                     streams={cell.camera.streams} 
                     quality={cell.quality} 
                     onQualityChange={(newQuality) => onQualityChange(cell.id, newQuality)}
+                    cameraName={cell.camera.name}
                 />
             ) : (
                 <div className="flex-grow flex items-center justify-center text-white/50">
@@ -414,9 +442,23 @@ const LiveViewPage = () => {
     const gridContainerRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
+        console.log('[LIVEVIEW] Initializing LiveViewPage');
         const storedViews = localStorage.getItem('live_views');
+        let parsedViews: SavedView[] = [];
         if(storedViews) {
-            setAllViews(JSON.parse(storedViews));
+            const rawViews = JSON.parse(storedViews);
+            // Validate and clean views
+            parsedViews = rawViews.filter((view: any) => {
+                return view &&
+                       typeof view.id === 'string' &&
+                       typeof view.name === 'string' &&
+                       typeof view.layout === 'string' &&
+                       Array.isArray(view.gridState) &&
+                       typeof view.ownerId === 'string';
+            });
+            console.log('[LIVEVIEW] Loaded and validated views:', parsedViews.length, 'of', rawViews.length);
+            setAllViews(parsedViews);
+            localStorage.setItem('live_views', JSON.stringify(parsedViews)); // Save cleaned views
         } else {
             const demoSharedView: SavedView = {
                 id: 'shared_demo_1', name: "Admin's Shared View", layout: '2x2',
@@ -424,12 +466,75 @@ const LiveViewPage = () => {
             };
             setAllViews([demoSharedView]);
             localStorage.setItem('live_views', JSON.stringify([demoSharedView]));
+            console.log('[LIVEVIEW] Created demo shared view');
+        }
+
+        // Restore UI state
+        try {
+            const storedSidebar = localStorage.getItem('liveview_sidebar_collapsed');
+            if (storedSidebar !== null) {
+                setSidebarCollapsed(storedSidebar === 'true');
+                console.log('[LIVEVIEW] Restored sidebar state:', storedSidebar);
+            }
+
+            const storedLayout = localStorage.getItem('liveview_layout');
+            if (storedLayout === '1x1' || storedLayout === '2x2' || storedLayout === '3x3' || storedLayout === '1+5' || storedLayout === '1+11') {
+                setLayout(storedLayout as GridLayout);
+                console.log('[LIVEVIEW] Restored layout:', storedLayout);
+
+                const storedGrid = localStorage.getItem('liveview_grid_state');
+                if (storedGrid) {
+                    const parsed: GridCellState[] = JSON.parse(storedGrid);
+                    if (Array.isArray(parsed) && parsed.length > 0) {
+                        const cameraCount = parsed.filter(c => c.camera).length;
+                        if (cameraCount > 0) {
+                            console.log('[LIVEVIEW] Restored grid state with', cameraCount, 'cameras from direct storage');
+                            setGridState(parsed);
+                        } else {
+                            // Check for current session view
+                            const currentSession = parsedViews.find((v: SavedView) => v.id === 'current_session');
+                            if (currentSession && currentSession.gridState.some(c => c.camera)) {
+                                console.log('[LIVEVIEW] Loading current session view with cameras');
+                                setLayout(currentSession.layout);
+                                setGridState(currentSession.gridState);
+                            } else {
+                                console.log('[LIVEVIEW] No cameras in stored state, creating initial state');
+                                setGridState(createInitialGridState(storedLayout as GridLayout));
+                            }
+                        }
+                    } else {
+                        console.log('[LIVEVIEW] Invalid grid state, creating initial state');
+                        setGridState(createInitialGridState(storedLayout as GridLayout));
+                    }
+                } else {
+                    // Check for current session view
+                    const currentSession = parsedViews.find((v: SavedView) => v.id === 'current_session');
+                    if (currentSession && currentSession.gridState.some(c => c.camera)) {
+                        console.log('[LIVEVIEW] Loading current session view with cameras');
+                        setLayout(currentSession.layout);
+                        setGridState(currentSession.gridState);
+                    } else {
+                        console.log('[LIVEVIEW] No stored grid state, creating initial state');
+                        setGridState(createInitialGridState(storedLayout as GridLayout));
+                    }
+                }
+            } else {
+                console.log('[LIVEVIEW] No valid stored layout, using default 2x2');
+                setLayout('2x2');
+                setGridState(createInitialGridState('2x2'));
+            }
+        } catch (error) {
+            console.error('[LIVEVIEW] Error restoring state:', error);
+            // Fallback to defaults
+            setLayout('2x2');
+            setGridState(createInitialGridState('2x2'));
         }
     }, []);
     
     useEffect(() => {
         setMaximizedCellId(null);
-        setGridState(createInitialGridState(layout));
+        setGridState(prevState => reorganizeCamerasForLayout(prevState, layout));
+        try { localStorage.setItem('liveview_layout', layout); } catch {}
     }, [layout]);
 
     const handleLayoutChange = useCallback((newLayout: GridLayout) => setLayout(newLayout), []);
@@ -438,22 +543,60 @@ const LiveViewPage = () => {
     const handleQualityChange = useCallback((cellId: number, quality: 'main' | 'sub') => setGridState(prev => prev.map(cell => cell.id === cellId ? { ...cell, quality } : cell)), []);
     const handleClearCell = useCallback((cellId: number) => setGridState(prev => prev.map(cell => cell.id === cellId ? { ...cell, camera: null } : cell)), []);
     const handleMaximizeToggle = useCallback((cellId: number) => setMaximizedCellId(prev => prev === cellId ? null : cellId), []);
+
+    // Auto-save current session when grid state changes
+    useEffect(() => {
+        const cameraCount = gridState.filter(cell => cell.camera !== null).length;
+        if (cameraCount > 0) {
+            const currentSessionView: SavedView = {
+                id: 'current_session',
+                name: 'Current Session',
+                layout,
+                gridState: [...gridState],
+                ownerId: user?.id || 'anonymous',
+                sharedWith: []
+            };
+
+            try {
+                const storedViews = JSON.parse(localStorage.getItem('live_views') || '[]');
+                const filteredViews = storedViews.filter((v: SavedView) => v.id !== 'current_session');
+                const updatedViews = [...filteredViews, currentSessionView];
+                localStorage.setItem('live_views', JSON.stringify(updatedViews));
+                console.log('[LIVEVIEW] Auto-saved current session with', cameraCount, 'cameras');
+            } catch (error) {
+                console.error('[LIVEVIEW] Error auto-saving session:', error);
+            }
+        }
+    }, [gridState, layout, user]);
     
     const handleConfirmSaveView = useCallback((saveData: { mode: 'new', name: string } | { mode: 'overwrite', id: string }) => {
-        if (!user) return;
+        if (!user) {
+            console.error('[LIVEVIEW] Cannot save view: no user logged in');
+            return;
+        }
+
+        const cameraCount = gridState.filter(cell => cell.camera !== null).length;
+        console.log('[LIVEVIEW] Saving view - mode:', saveData.mode, 'cameras:', cameraCount, 'layout:', layout);
 
         if (saveData.mode === 'new') {
-            const newView: SavedView = { 
-                id: Date.now().toString(), name: saveData.name, layout, 
-                gridState, ownerId: user.id, sharedWith: [] 
+            const newView: SavedView = {
+                id: Date.now().toString(),
+                name: saveData.name,
+                layout,
+                gridState: [...gridState], // Deep copy to avoid reference issues
+                ownerId: user.id,
+                sharedWith: []
             };
             const updatedViews = [...allViews, newView];
             setAllViews(updatedViews);
             localStorage.setItem('live_views', JSON.stringify(updatedViews));
+            console.log('[LIVEVIEW] Created new view:', newView.name, 'with ID:', newView.id);
         } else if (saveData.mode === 'overwrite') {
             const updatedViews = allViews.map(view => {
                 if (view.id === saveData.id) {
-                    return { ...view, layout, gridState };
+                    const updatedView = { ...view, layout, gridState: [...gridState] };
+                    console.log('[LIVEVIEW] Overwriting view:', view.name, 'with new state');
+                    return updatedView;
                 }
                 return view;
             });
@@ -466,8 +609,12 @@ const LiveViewPage = () => {
     const handleLoadView = useCallback((id: string) => {
         const viewToLoad = allViews.find(v => v.id === id);
         if(viewToLoad) {
+            const cameraCount = viewToLoad.gridState.filter(cell => cell.camera !== null).length;
+            console.log('[LIVEVIEW] Loading view:', viewToLoad.name, 'layout:', viewToLoad.layout, 'cameras:', cameraCount);
             setLayout(viewToLoad.layout);
-            setGridState(viewToLoad.gridState);
+            setGridState([...viewToLoad.gridState]); // Deep copy
+        } else {
+            console.error('[LIVEVIEW] View not found:', id);
         }
     }, [allViews]);
     
@@ -475,6 +622,7 @@ const LiveViewPage = () => {
         const updatedViews = allViews.map(v => v.id === id ? { ...v, name: newName } : v);
         setAllViews(updatedViews);
         localStorage.setItem('live_views', JSON.stringify(updatedViews));
+        console.log('[LIVEVIEW] Renamed view', id, 'to:', newName);
     }, [allViews]);
 
     const handleDeleteView = useCallback((id: string) => {
@@ -483,6 +631,7 @@ const LiveViewPage = () => {
             const updatedViews = allViews.filter(v => v.id !== id);
             setAllViews(updatedViews);
             localStorage.setItem('live_views', JSON.stringify(updatedViews));
+            console.log('[LIVEVIEW] Deleted view:', viewToDelete.name);
         }
     }, [allViews, t]);
 
@@ -503,8 +652,8 @@ const LiveViewPage = () => {
         }
     }
     
-    const personalViews = user ? allViews.filter(v => v.ownerId === user.id) : [];
-    const sharedViews = user ? allViews.filter(v => v.ownerId !== user.id && v.sharedWith.includes(user.role)) : [];
+    const personalViews = user ? allViews.filter(v => v.ownerId === user.id && v.id !== 'current_session') : [];
+    const sharedViews = user ? allViews.filter(v => v.ownerId !== user.id && v.sharedWith.includes(user.role) && v.id !== 'current_session') : [];
 
     return (
         <div className="h-full">

@@ -1,5 +1,6 @@
 
 import type { Server } from '../config/serverConfig';
+import { buildAuthHeaders, loginToFrigateServer } from '../config/serverConfig';
 
 export interface ServerStatus {
   status: 'online' | 'offline';
@@ -30,16 +31,64 @@ interface FrigateStats {
   };
 }
 
-
 // Fetches real status from a Frigate server
 export const fetchServerStatus = async (server: Server): Promise<ServerStatus> => {
+  const startTime = Date.now();
+  console.log(`[STATUS] Fetching status for ${server.name} (${server.id})`);
+  
   try {
+    // Attempt login for Frigate servers before fetching stats
+    if (server.auth?.type === 'frigate') {
+      console.log(`[STATUS] ${server.name}: Attempting Frigate login...`);
+      const loginSuccess = await loginToFrigateServer(server);
+      console.log(`[STATUS] ${server.name}: Login ${loginSuccess ? 'SUCCESS' : 'FAILED'}`);
+    }
+    
+    const useProxy = (() => {
+      try {
+        const env: any = (import.meta as any)?.env || {};
+        if (env?.DEV) return true;
+        if (env?.VITE_FORCE_PROXY === 'true') return true;
+        // Check if running on development ports (3000, 3001, 5173, etc.)
+        if (typeof window !== 'undefined') {
+          const port = window.location?.port;
+          if (port && (port === '3000' || port === '3001' || port === '5173')) return true;
+        }
+      } catch {}
+      return false;
+    })();
+    
+    const buildApiUrl = (apiPath: string): string => {
+      if (useProxy) return `/proxy/${server.id}${apiPath}`;
+      try { return new URL(apiPath, server.url).toString(); } catch { return `${server.url.replace(/\/$/, '')}${apiPath}`; }
+    };
+    
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);
     
-    const headers = server.token ? { 'Authorization': `Bearer ${server.token}` } : {};
-    const response = await fetch(new URL('/api/stats', server.url).toString(), { headers, signal: controller.signal });
+    const headers = buildAuthHeaders(server);
+    const statsUrl = buildApiUrl('/api/stats');
+    
+    console.log(`[STATUS] ${server.name}: Fetching ${statsUrl}`);
+    console.log(`[STATUS] ${server.name}: Using proxy: ${useProxy}`);
+    console.log(`[STATUS] ${server.name}: Auth type: ${server.auth?.type || 'none'}`);
+    
+    const fetchOptions: RequestInit = { 
+      headers, 
+      signal: controller.signal 
+    };
+    
+    // Include credentials for Frigate auth to send cookies
+    if (server.auth?.type === 'frigate') {
+      fetchOptions.credentials = 'include';
+      console.log(`[STATUS] ${server.name}: Including credentials for cookies`);
+    }
+    
+    const response = await fetch(statsUrl, fetchOptions);
     clearTimeout(timeoutId);
+    
+    const elapsed = Date.now() - startTime;
+    console.log(`[STATUS] ${server.name}: Response ${response.status} in ${elapsed}ms`);
 
     if (!response.ok) {
       throw new Error('Server offline');
@@ -85,7 +134,8 @@ export const fetchServerStatus = async (server: Server): Promise<ServerStatus> =
         }
     }
 
-
+    console.log(`[STATUS] ${server.name}: Successfully parsed stats`);
+    
     return {
       status: 'online',
       resources: {
@@ -96,12 +146,22 @@ export const fetchServerStatus = async (server: Server): Promise<ServerStatus> =
       },
     };
   } catch (error) {
-    if (error instanceof TypeError && error.message === 'Failed to fetch') {
-        // Silently fail for network errors during polling to avoid console spam.
-        // The UI will reflect the offline status, and the initial load error is more descriptive.
+    const elapsed = Date.now() - startTime;
+    console.error(`[STATUS] ${server.name}: FAILED after ${elapsed}ms`);
+    
+    if (error instanceof Error) {
+      console.error(`[STATUS] ${server.name}: Error type: ${error.name}`);
+      console.error(`[STATUS] ${server.name}: Error message: ${error.message}`);
+      
+      if (error.name === 'AbortError') {
+        console.error(`[STATUS] ${server.name}: Request timed out after 5 seconds`);
+      } else if (error.message.includes('Failed to fetch')) {
+        console.error(`[STATUS] ${server.name}: Network error - cannot reach server`);
+      }
     } else {
-        console.error(`An unexpected error occurred while fetching status for ${server.name}:`, error);
+      console.error(`[STATUS] ${server.name}: Unknown error:`, error);
     }
+    
     return {
       status: 'offline',
       resources: { cpu: 0, mem: 0, hdd: 0, gpu: 0 },

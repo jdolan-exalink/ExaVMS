@@ -17,9 +17,12 @@ export const CameraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
+    console.log(`[CAMERA_CTX] Initializing CameraContext`);
     // Load initial data from cache immediately for a fast UI response
     const { cameras: cachedCameras, servers: cachedServers } = getCachedCameras();
+    console.log(`[CAMERA_CTX] Loaded from cache: ${cachedCameras.length} cameras, ${cachedServers.length} servers`);
     if (cachedCameras.length > 0) {
+        console.log(`[CAMERA_CTX] Setting cached cameras:`, cachedCameras.map(c => ({ id: c.id, name: c.name, streams: c.streams })));
         setCameras(cachedCameras);
         setServers(cachedServers);
         setIsLoading(false);
@@ -27,7 +30,10 @@ export const CameraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     // Then, fetch fresh data from servers and start polling
     const manageUpdates = async () => {
+        console.log(`[CAMERA_CTX] Fetching fresh camera data...`);
         const { cameras: freshCameras, servers: freshServers } = await updateAllCameras();
+        console.log(`[CAMERA_CTX] Fresh data: ${freshCameras.length} cameras, ${freshServers.length} servers`);
+        console.log(`[CAMERA_CTX] Fresh cameras:`, freshCameras.map(c => ({ id: c.id, name: c.name, streams: c.streams })));
         setCameras(freshCameras);
         setServers(freshServers);
         if (isLoading) {
@@ -37,8 +43,12 @@ export const CameraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     
     manageUpdates(); // Initial fetch
     const intervalId = setInterval(manageUpdates, 60000); // Poll every 60 seconds
+    console.log(`[CAMERA_CTX] Set up polling interval (60s)`);
 
-    return () => clearInterval(intervalId);
+    return () => {
+      console.log(`[CAMERA_CTX] Cleaning up polling interval`);
+      clearInterval(intervalId);
+    };
   }, [isLoading]);
 
   const value = useMemo(() => ({
