@@ -58,7 +58,10 @@ const Header = () => {
       <div className="flex items-center gap-4">
         <Link to="/" className="flex items-center gap-3 flex-shrink-0">
           <Logo />
-          <span className="text-xl font-bold text-gray-800 dark:text-gray-200 hidden sm:inline">{t('app_title')}</span>
+          <div className="flex flex-col">
+            <span className="text-xl font-bold text-gray-800 dark:text-gray-200 hidden sm:inline leading-tight">{t('app_title')}</span>
+            <span className="text-xs text-gray-500 dark:text-gray-400 hidden sm:inline -mt-0.5">v{process.env.npm_package_version || '0.0.1'}</span>
+          </div>
         </Link>
         <nav className="hidden md:flex items-center gap-2">
            <div className="h-6 w-px bg-gray-200 dark:bg-gray-700 mx-2"></div>
